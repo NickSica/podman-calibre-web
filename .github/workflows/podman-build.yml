@@ -1,0 +1,78 @@
+name: Podman Image CI
+
+on:
+  workflow_dispatch:
+    inputs:
+      logLevel:
+        description: 'Log level'
+        required: true
+        default: 'warning'
+        type: choice
+        options:
+        - info
+        - warning
+        - debug
+  schedule:
+    - cron: "0 23 * * 0"
+  
+
+env:
+  IMAGE_NAME: calibre-web
+  URL: https://github.com/janeczku/calibre-web
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+    - 
+      uses: actions/checkout@v2
+      with:
+        fetch-depth: 0
+        ref: ${{ github.event.pull_request.head.ref }}
+    -
+      name: Set variables
+      run: |
+        sed "" ./.github/variables/version.var >> $GITHUB_ENV
+    - 
+      name: Get version
+      run: |
+        NEW_VERSION=$(git ls-remote --tags "${{ env.URL }}" | cut -d/ -f3- | tail -n1 | tr -d '^{}')
+        echo NEW_VERSION=$NEW_VERSION >> $GITHUB_ENV
+    -
+      name: Login to Docker Hub
+      if: env.CUR_VERSION != env.NEW_VERSION
+      uses: redhat-actions/podman-login@v1
+      with:
+        registry: docker.io
+        username: ${{ secrets.DOCKER_HUB_USERNAME }}
+        password: ${{ secrets.DOCKER_HUB_ACCESS_TOKEN }}
+    - 
+      name: Buildah Action
+      id: build-image
+      if: env.CUR_VERSION != env.NEW_VERSION
+      uses: redhat-actions/buildah-build@v2
+      with:
+        image: ${{ env.IMAGE_NAME }}
+        tags: latest ${{ github.sha }}
+        containerfiles: |
+          ./Containerfile
+    -
+      name: Push to Docker Hub
+      id: push-to-docker
+      if: env.CUR_VERSION != env.NEW_VERSION
+      uses: redhat-actions/push-to-registry@v2
+      with:
+        image: ${{ steps.build-image.outputs.image }}
+        tags: ${{ steps.build-image.outputs.tags }}
+        registry: docker.io/${{ secrets.DOCKER_HUB_USERNAME }}
+    -
+      name: Push version number
+      if: env.CUR_VERSION != env.NEW_VERSION
+      run: |
+        echo CUR_VERSION=${{ env.NEW_VERSION }} > ./.github/variables/version.var
+        git config --global user.name ${{ secrets.GIT_USERNAME }}
+        git config --global user.email ${{ secrets.GIT_EMAIL }}
+        git add ./.github/variables/version.var
+        git commit -m "Update version number"
+        git push
+    
